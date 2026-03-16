@@ -19,15 +19,8 @@
     <!-- CSS -->
     <link rel="stylesheet" href="css/styles.css">
 
-    <!-- Production API config: set this to your Render backend URL after deployment -->
-    <!-- <script>window.DROPORIA_API_URL = 'https://YOUR-APP.onrender.com';</script> -->
-    <script>
-        // Auto-detect: use same origin if served from backend, otherwise use config above
-        if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-            // Production: DROPORIA_API_URL must be set above (uncomment and fill in your Render URL)
-            window.DROPORIA_API_URL = window.DROPORIA_API_URL || '';
-        }
-    </script>
+    <!-- Production API config -->
+    <script>window.DROPORIA_API_URL = 'https://droporia.onrender.com';</script>
 
 </head>
 <body>
