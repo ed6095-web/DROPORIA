@@ -1,18 +1,19 @@
-import play from 'play-dl';
 import { instagramGetUrl } from 'instagram-url-direct';
-import { spawn } from 'child_process';
-import axios from 'axios';
+import { spawn, execFile } from 'child_process';
+import { promisify } from 'util';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// yt-dlp binary path
+// yt-dlp binary: yt-dlp.exe on Windows, yt-dlp on Linux (downloaded at build on Render)
 const ytdlpBin = path.join(process.cwd(), process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp');
 
-// ffmpeg-static binary path (yt-dlp uses this to merge streams)
+// ffmpeg-static binary for merging
 const ffmpegBin = path.join(process.cwd(), 'node_modules', 'ffmpeg-static', process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
+
+const execFileAsync = promisify(execFile);
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
@@ -24,32 +25,50 @@ function formatBytes(bytes, decimals = 2) {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(decimals)) + ' ' + sizes[i];
 }
 
-function formatDuration(totalSecs) {
-    if (!totalSecs) return 'N/A';
-    const secs = Math.floor(totalSecs);
-    const hours = Math.floor(secs / 3600);
-    const mins = Math.floor((secs % 3600) / 60);
+function formatDuration(secs) {
+    if (!secs) return 'N/A';
+    secs = Math.floor(secs);
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
     const s = secs % 60;
-    if (hours > 0) return `${hours}:${String(mins).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-    return `${mins}:${String(s).padStart(2,'0')}`;
+    if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    return `${m}:${String(s).padStart(2,'0')}`;
 }
 
-// ─── YouTube via play-dl (metadata only) ─────────────────────────────────────
+// ─── YouTube via yt-dlp --dump-json ──────────────────────────────────────────
 
 async function getYouTubeInfo(videoUrl) {
-    console.log('[mediaHelper] Fetching YouTube metadata via play-dl');
-    const info = await play.video_info(videoUrl);
-    const details = info.video_details;
-    const formats = info.format;
+    console.log('[mediaHelper] Fetching YouTube info via yt-dlp --dump-json');
 
-    const premerged = formats.filter(f => f.mimeType?.startsWith('video/') && f.audioQuality);
-    const videoOnly = formats.filter(f => f.mimeType?.startsWith('video/') && !f.audioQuality);
-    const audioOnly = formats.filter(f => f.mimeType?.startsWith('audio/') && !f.isDrc && !f.isVb);
+    let stdout = '';
+    try {
+        const result = await execFileAsync(ytdlpBin, [
+            '--dump-json',
+            '--no-playlist',
+            '--quiet',
+            videoUrl
+        ], { timeout: 45000, maxBuffer: 20 * 1024 * 1024 });
+        stdout = result.stdout;
+    } catch (err) {
+        stdout = err.stdout || '';
+        if (!stdout.trim()) {
+            throw new Error(err.stderr?.split('\n').find(l => l.includes('ERROR')) || err.message);
+        }
+    }
 
+    const info = JSON.parse(stdout);
+    const formats = info.formats || [];
+
+    // Split into video-only, audio-only, and combined (muxed)
+    const combined  = formats.filter(f => f.vcodec !== 'none' && f.acodec !== 'none' && f.url);
+    const videoOnly = formats.filter(f => f.vcodec !== 'none' && f.acodec === 'none' && f.url);
+    const audioOnly = formats.filter(f => f.vcodec === 'none' && f.acodec !== 'none' && f.url && !f.format_note?.includes('DRC') && !f.format_note?.includes('VB'));
+
+    // Best audio for merging (prefer m4a)
     const bestAudio = audioOnly
-        .filter(f => f.container === 'mp4' || f.mimeType?.includes('mp4'))
-        .sort((a, b) => (b.averageBitrate || 0) - (a.averageBitrate || 0))[0]
-        || audioOnly.sort((a, b) => (b.averageBitrate || 0) - (a.averageBitrate || 0))[0];
+        .filter(f => f.ext === 'm4a' || f.acodec?.startsWith('mp4a'))
+        .sort((a, b) => (b.abr || 0) - (a.abr || 0))[0]
+        || audioOnly.sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
 
     const downloadable_formats = [];
     const audio_formats = [];
@@ -60,31 +79,31 @@ async function getYouTubeInfo(videoUrl) {
         const h = f.height;
         if (!h) continue;
         const existing = heightMap[h];
-        const fIsMP4 = f.mimeType?.includes('mp4') && f.mimeType?.includes('avc1');
-        const existingIsMP4 = existing && existing.mimeType?.includes('mp4') && existing.mimeType?.includes('avc1');
+        const fIsH264 = f.vcodec?.startsWith('avc1') || f.ext === 'mp4';
+        const existingIsH264 = existing && (existing.vcodec?.startsWith('avc1') || existing.ext === 'mp4');
         if (!existing) {
             heightMap[h] = f;
-        } else if (fIsMP4 && !existingIsMP4) {
+        } else if (fIsH264 && !existingIsH264) {
             heightMap[h] = f;
-        } else if ((fIsMP4 === existingIsMP4) && (f.averageBitrate || 0) > (existing.averageBitrate || 0)) {
+        } else if ((fIsH264 === existingIsH264) && (f.tbr || 0) > (existing.tbr || 0)) {
             heightMap[h] = f;
         }
     }
 
     for (const [height, f] of Object.entries(heightMap)) {
         const h = parseInt(height);
-        const sizeBytes = parseInt(f.contentLength || 0) + parseInt(bestAudio?.contentLength || 0);
+        const sizeBytes = (f.filesize || f.filesize_approx || 0) + (bestAudio?.filesize || bestAudio?.filesize_approx || 0);
         downloadable_formats.push({
-            format_id: String(f.itag),
-            audio_format_id: bestAudio ? String(bestAudio.itag) : null,
+            format_id: f.format_id,
+            audio_format_id: bestAudio?.format_id || null,
             ext: 'mp4',
             filesize_approx: sizeBytes || null,
             filesize_string: sizeBytes ? formatBytes(sizeBytes) : 'Unknown',
-            url: null, // resolved at download time via yt-dlp
+            url: null,
             height: h,
             width: f.width || null,
             fps: f.fps || 30,
-            quality_note: f.qualityLabel || `${h}p`,
+            quality_note: f.format_note || `${h}p`,
             resolution: f.width ? `${f.width}x${h}` : `${h}p`,
             type: 'video_with_audio',
             has_audio: true,
@@ -93,21 +112,21 @@ async function getYouTubeInfo(videoUrl) {
         });
     }
 
-    // Pre-merged formats (360p etc.) — these have direct URLs from play-dl
-    for (const f of premerged) {
+    // Combined/muxed formats (e.g. 360p with audio already baked in)
+    for (const f of combined) {
         const h = f.height || 0;
-        if (heightMap[h]) continue;
+        if (heightMap[h]) continue; // skip if we have a better split version
         downloadable_formats.push({
-            format_id: String(f.itag),
+            format_id: f.format_id,
             audio_format_id: null,
-            ext: 'mp4',
-            filesize_approx: parseInt(f.contentLength || 0) || null,
-            filesize_string: formatBytes(parseInt(f.contentLength || 0)),
+            ext: f.ext || 'mp4',
+            filesize_approx: f.filesize || f.filesize_approx || null,
+            filesize_string: formatBytes(f.filesize || f.filesize_approx),
             url: f.url || null,
             height: h,
             width: f.width || null,
             fps: f.fps || 30,
-            quality_note: f.qualityLabel || `${h}p`,
+            quality_note: f.format_note || `${h}p`,
             resolution: f.width ? `${f.width}x${h}` : `${h}p`,
             type: 'video_with_audio',
             has_audio: true,
@@ -116,33 +135,31 @@ async function getYouTubeInfo(videoUrl) {
         });
     }
 
-    // Audio-only formats — emit both m4a and mp3 variants
-    const audioBitrates = new Set();
-    for (const f of audioOnly) {
-        const abr = Math.round((f.averageBitrate || 0) / 1000);
-        if (audioBitrates.has(abr)) continue;
-        audioBitrates.add(abr);
-        const isM4A = f.container === 'mp4' || f.mimeType?.includes('mp4');
-        // M4A variant
+    // Audio-only formats — emit both native (m4a) and mp3 variants
+    const audioBitratesSeen = new Set();
+    for (const f of audioOnly.sort((a, b) => (b.abr || 0) - (a.abr || 0))) {
+        const abr = Math.round(f.abr || 0);
+        if (audioBitratesSeen.has(abr)) continue;
+        audioBitratesSeen.add(abr);
+        const isM4A = f.ext === 'm4a' || f.acodec?.startsWith('mp4a');
         audio_formats.push({
-            format_id: String(f.itag),
+            format_id: f.format_id,
             ext: isM4A ? 'm4a' : 'webm',
-            abr: abr,
-            filesize: parseInt(f.contentLength || 0) || null,
-            filesize_string: formatBytes(parseInt(f.contentLength || 0)),
+            abr,
+            filesize: f.filesize || f.filesize_approx || null,
+            filesize_string: formatBytes(f.filesize || f.filesize_approx),
             url: null,
             quality_note: `${abr}kbps (M4A)`,
             type: 'audio_only',
             has_audio: true,
             has_video: false,
             needs_merge: false,
-            quality_order: abr * 2 // *2 so mp3 (abr*2-1) sorts just below
+            quality_order: abr * 2
         });
-        // MP3 variant (same itag, re-encoded by yt-dlp at download time)
         audio_formats.push({
-            format_id: `${f.itag}_mp3`,
+            format_id: `${f.format_id}_mp3`,
             ext: 'mp3',
-            abr: abr,
+            abr,
             filesize: null,
             filesize_string: null,
             url: null,
@@ -158,42 +175,34 @@ async function getYouTubeInfo(videoUrl) {
     downloadable_formats.sort((a, b) => b.quality_order - a.quality_order);
     audio_formats.sort((a, b) => b.quality_order - a.quality_order);
 
+    // Best thumbnail
+    const thumbs = (info.thumbnails || []).filter(t => t.url);
+    const thumbnail_url = thumbs[thumbs.length - 1]?.url || info.thumbnail || null;
+
     return {
-        title: details.title || 'N/A',
-        thumbnail_url: details.thumbnails?.[details.thumbnails.length - 1]?.url || null,
-        uploader: details.channel?.name || 'N/A',
-        duration_string: formatDuration(details.durationInSec),
-        view_count: details.views || null,
-        like_count: null,
-        upload_date: details.uploadedAt || null,
-        description: (details.description || '').substring(0, 300),
+        title: info.title || 'N/A',
+        thumbnail_url,
+        uploader: info.uploader || info.channel || 'N/A',
+        duration_string: formatDuration(info.duration),
+        view_count: info.view_count || null,
+        like_count: info.like_count || null,
+        upload_date: info.upload_date || null,
+        description: (info.description || '').substring(0, 300),
         original_url: videoUrl,
         platform: 'YouTube',
         downloadable_formats,
         audio_formats,
-        thumbnails: details.thumbnails || []
+        thumbnails: thumbs
     };
 }
 
-// ─── Download via yt-dlp piped to HTTP response ───────────────────────────────
+// ─── Download via yt-dlp stdout pipe ─────────────────────────────────────────
 
-/**
- * Use yt-dlp to download a YouTube video and stream it directly to an Express response.
- * yt-dlp handles the downloading + merging internally using the bundled ffmpeg-static.
- *
- * @param {string} pageUrl     - YouTube page URL
- * @param {string} videoItag   - itag for video stream (null for audio-only)
- * @param {string} audioItag   - itag for audio stream
- * @param {object} res         - Express Response object
- * @returns {Promise<void>}
- */
 export function downloadViaYtDlp(pageUrl, videoItag, audioItag, res) {
     return new Promise((resolve, reject) => {
-        // Strip _mp3 suffix if present — it means convert to mp3 after download
         const wantMp3 = audioItag?.endsWith('_mp3');
         const cleanAudioItag = audioItag?.replace('_mp3', '');
 
-        // Build format selector
         let formatSelector;
         if (videoItag && cleanAudioItag) {
             formatSelector = `${videoItag}+${cleanAudioItag}/bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]`;
@@ -212,48 +221,33 @@ export function downloadViaYtDlp(pageUrl, videoItag, audioItag, res) {
         ];
 
         if (wantMp3) {
-            // Re-encode to mp3 via ffmpeg
             args.push('--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0');
         } else if (!videoItag) {
-            // Audio-only non-mp3: keep original container
             args.push('--extract-audio');
         } else {
-            // Video+audio merge
             args.push('--merge-output-format', 'mp4');
         }
 
         args.push(pageUrl);
+        console.log(`[mediaHelper] yt-dlp: -f "${formatSelector}" ${pageUrl}`);
 
-        console.log(`[mediaHelper] yt-dlp args: -f "${formatSelector}" -o - ${pageUrl}`);
         const proc = spawn(ytdlpBin, args);
-
         let stderrBuf = '';
-        proc.stderr.on('data', d => {
-            stderrBuf += d.toString();
-        });
-
+        proc.stderr.on('data', d => { stderrBuf += d.toString(); });
         proc.stdout.pipe(res);
-
-        proc.stdout.on('error', err => {
-            console.error('[mediaHelper] stdout error:', err.message);
-        });
+        proc.stdout.on('error', err => console.error('[mediaHelper] stdout error:', err.message));
 
         proc.on('close', code => {
-            console.log(`[mediaHelper] yt-dlp exited with code ${code}`);
-            if (stderrBuf) console.log('[mediaHelper] yt-dlp stderr:', stderrBuf.substring(0, 500));
-            if (code === 0 || code === null) {
-                resolve();
-            } else {
-                const err = new Error(`yt-dlp failed (code ${code}): ${stderrBuf.substring(0, 300)}`);
-                if (!res.headersSent) reject(err);
-                else resolve(); // headers sent, stream was partially written
+            console.log(`[mediaHelper] yt-dlp exited: ${code}`);
+            if (stderrBuf) console.log('[mediaHelper] stderr:', stderrBuf.substring(0, 500));
+            if (code === 0 || code === null) resolve();
+            else {
+                const e = new Error(`yt-dlp failed (${code}): ${stderrBuf.substring(0, 200)}`);
+                if (!res.headersSent) reject(e); else resolve();
             }
         });
 
-        proc.on('error', err => {
-            console.error('[mediaHelper] spawn error:', err.message);
-            reject(err);
-        });
+        proc.on('error', err => { console.error('[mediaHelper] spawn error:', err.message); reject(err); });
     });
 }
 
@@ -263,13 +257,9 @@ async function getInstagramInfo(videoUrl) {
     console.log('[mediaHelper] Fetching Instagram info via instagram-url-direct');
 
     const result = await instagramGetUrl(videoUrl);
-
-    if (!result || !result.url_list || result.url_list.length === 0) {
-        throw new Error('No downloadable media found for this Instagram URL');
-    }
+    if (!result?.url_list?.length) throw new Error('No downloadable media found for this Instagram URL');
 
     const downloadable_formats = result.url_list.map((mediaUrl, index) => {
-        // Detect if it's an image URL (Instagram CDN images contain /e15/ or end in .jpg etc.)
         const isImage = /\.(jpg|jpeg|png|webp)(\?|$)/i.test(mediaUrl) || mediaUrl.includes('/e15/') || mediaUrl.includes('/e35/');
         const ext = isImage ? 'jpg' : 'mp4';
         const label = isImage ? 'Image' : 'Video';
@@ -279,9 +269,7 @@ async function getInstagramInfo(videoUrl) {
             filesize: null,
             filesize_string: null,
             url: mediaUrl,
-            height: 0,
-            width: 0,
-            fps: null,
+            height: 0, width: 0, fps: null,
             quality_note: result.url_list.length > 1 ? `${label} ${index + 1}` : `Best Quality ${label}`,
             resolution: 'Best Available',
             type: isImage ? 'image' : 'video_with_audio',
@@ -294,7 +282,7 @@ async function getInstagramInfo(videoUrl) {
     downloadable_formats.sort((a, b) => b.quality_order - a.quality_order);
 
     return {
-        title: result.media_details?.caption?.text?.substring(0, 100) || 'Instagram Video',
+        title: result.media_details?.caption?.text?.substring(0, 100) || 'Instagram Post',
         thumbnail_url: result.media_details?.display_url || null,
         uploader: result.media_details?.owner?.username || 'Instagram User',
         duration_string: 'N/A',
@@ -315,7 +303,6 @@ async function getInstagramInfo(videoUrl) {
 export const getVideoInfo = async (videoUrl) => {
     const isYouTube = videoUrl.includes('youtube.com') || videoUrl.includes('youtu.be');
     const isInstagram = videoUrl.includes('instagram.com');
-
     try {
         if (isYouTube) return await getYouTubeInfo(videoUrl);
         if (isInstagram) return await getInstagramInfo(videoUrl);
