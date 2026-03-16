@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Droporia - Advanced Video Downloader</title>
+    
+    <!-- Enhanced Meta Tags -->
+    <meta name="description" content="Download videos from YouTube, Instagram, and more with multiple quality options">
+    <meta name="keywords" content="video downloader, youtube, instagram, droporia">
+    <meta name="theme-color" content="#3498db">
+    
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    
+    <!-- CSS -->
+    <link rel="stylesheet" href="css/styles.css">
+
+    <!-- Production API config: set this to your Render backend URL after deployment -->
+    <!-- <script>window.DROPORIA_API_URL = 'https://YOUR-APP.onrender.com';</script> -->
+    <script>
+        // Auto-detect: use same origin if served from backend, otherwise use config above
+        if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+            // Production: DROPORIA_API_URL must be set above (uncomment and fill in your Render URL)
+            window.DROPORIA_API_URL = window.DROPORIA_API_URL || '';
+        }
+    </script>
+
+</head>
+<body>
+    <!-- Animated Background -->
+    <div class="animated-background">
+        <div class="floating-shapes">
+            <div class="shape shape-1"></div>
+            <div class="shape shape-2"></div>
+            <div class="shape shape-3"></div>
+            <div class="shape shape-4"></div>
+            <div class="shape shape-5"></div>
+        </div>
+        <div class="gradient-overlay"></div>
+    </div>
+
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-brand">
+                <i class="fas fa-download animated-logo"></i>
+                <span class="brand-text">Droporia</span>
+                <span class="version-badge">v2.0</span>
+            </div>
+            <div class="nav-controls">
+                <button id="theme-toggle" class="theme-toggle" title="Toggle theme">
+                    <i class="fas fa-moon"></i>
+                </button>
+                <div class="stats-display">
+                    <div class="stat-item">
+                        <i class="fas fa-download"></i>
+                        <span id="download-count">0</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Container -->
+    <main class="main-container">
+        <!-- Header Section -->
+        <header class="hero-section">
+            <div class="hero-content">
+                <h1 class="hero-title">
+                    <span class="gradient-text">Advanced Video Downloader</span>
+                    <div class="title-decoration"></div>
+                </h1>
+                <p class="hero-description">
+                    Download videos from YouTube, Instagram, and more platforms with multiple quality options
+                </p>
+                <div class="platform-icons">
+                    <div class="platform-icon youtube">
+                        <i class="fab fa-youtube"></i>
+                        <span>YouTube</span>
+                    </div>
+                    <div class="platform-icon instagram">
+                        <i class="fab fa-instagram"></i>
+                        <span>Instagram</span>
+                    </div>
+                    <div class="platform-icon tiktok">
+                        <i class="fab fa-tiktok"></i>
+                        <span>TikTok</span>
+                    </div>
+                    <div class="platform-icon twitter">
+                        <i class="fab fa-twitter"></i>
+                        <span>Twitter</span>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Input Section -->
+        <section class="input-section glass-card">
+            <div class="input-header">
+                <h2><i class="fas fa-link"></i> Paste Your Video URL</h2>
+            </div>
+
+            <!-- Video URL Tab Only -->
+            <div class="tab-content active" id="video-tab">
+                <div class="input-group">
+                    <div class="input-wrapper">
+                        <input type="url" 
+                               id="videoUrlInput" 
+                               placeholder="https://www.youtube.com/watch?v=... or https://www.instagram.com/p/..."
+                               spellcheck="false">
+                        <div class="input-decoration"></div>
+                    </div>
+                    <button id="fetchInfoButton" class="primary-btn">
+                        <i class="fas fa-search"></i>
+                        <span class="btn-text">Get Video Info</span>
+                        <div class="btn-ripple"></div>
+                    </button>
+                </div>
+                <div class="url-examples">
+                    <span class="examples-label">Examples:</span>
+                    <button class="example-btn" data-url="https://www.youtube.com/watch?v=dQw4w9WgXcQ">YouTube Video</button>
+                    <button class="example-btn" data-url="https://www.instagram.com/p/example">Instagram Post</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Loading Section -->
+        <section id="loading-section" class="loading-section hidden">
+            <div class="loading-container">
+                <div class="advanced-loader">
+                    <div class="loader-circle"></div>
+                    <div class="loader-circle"></div>
+                    <div class="loader-circle"></div>
+                </div>
+                <p class="loading-text">Fetching video information...</p>
+                <div class="loading-progress">
+                    <div class="progress-bar"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Error Section -->
+        <section id="error-section" class="error-section hidden">
+            <div class="error-card glass-card">
+                <div class="error-icon">
+                    <i class="fas fa-exclamation-triangle"></i>
+                </div>
+                <h3>Oops! Something went wrong</h3>
+                <p id="errorMessage">An error occurred while processing your request.</p>
+                <button id="retry-button" class="secondary-btn">
+                    <i class="fas fa-redo"></i>
+                    Try Again
+                </button>
+            </div>
+        </section>
+
+        <!-- Results Section -->
+        <section id="results-section" class="results-section hidden"></section>
+
+        <!-- Features Section -->
+        <section class="features-section">
+            <div class="features-container">
+                <h2 class="features-title">Why Choose Droporia?</h2>
+                <div class="features-grid">
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-bolt"></i>
+                        </div>
+                        <h3>Lightning Fast</h3>
+                        <p>Download videos in seconds with our optimized servers</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-hd-video"></i>
+                        </div>
+                        <h3>Multiple Qualities</h3>
+                        <p>Choose from 144p to 4K quality options</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-shield-alt"></i>
+                        </div>
+                        <h3>Safe & Secure</h3>
+                        <p>No ads, no malware, completely safe to use</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-mobile-alt"></i>
+                        </div>
+                        <h3>Mobile Friendly</h3>
+                        <p>Works perfectly on all devices and browsers</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Preview Modal -->
+    <div id="previewModal" class="modal hidden">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content glass-card">
+            <div class="modal-header">
+                <h3 id="previewTitle">Video Preview</h3>
+                <button id="closeModalButton" class="modal-close">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div id="playerContainer" class="player-container"></div>
+                <div class="modal-actions">
+                    <a id="directDownloadButton" href="#" class="primary-btn download-btn">
+                        <i class="fas fa-download"></i>
+                        <span>Download Now</span>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="footer-content">
+            <div class="footer-brand">
+                <i class="fas fa-download"></i>
+                <span>Droporia</span>
+            </div>
+            <div class="footer-links">
+                <a href="#" class="footer-link">Privacy Policy</a>
+                <a href="#" class="footer-link">Terms of Service</a>
+                <a href="#" class="footer-link">Contact</a>
+            </div>
+            <div class="footer-info">
+                <p>&copy; <span id="currentYear">2024</span> Droporia. Made with ❤️ for creators</p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Confetti Container -->
+    <div id="confetti-container" class="confetti-container"></div>
+
+    <!-- Scripts -->
+    <script src="js/app.js"></script>
+</body>
+</html>

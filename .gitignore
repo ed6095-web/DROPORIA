@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+
+# Platform-specific binaries (will be auto-downloaded on server)
+backend/yt-dlp.exe
+backend/yt-dlp
+
+# Test & temp files
+backend/test_*.mjs
+backend/test_*.json
+backend/test_*.mp4
+backend/test_req.json
+
+# Build artifacts
+dist/
+.cache/
+
+# Environment files
+.env
+.env.local
+.env.production
+
+# OS
+.DS_Store
+Thumbs.db

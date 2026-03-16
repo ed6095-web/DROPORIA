@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: droporia-backend
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: npm install && node scripts/download-ytdlp.js
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
