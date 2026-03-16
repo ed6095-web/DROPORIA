@@ -29,14 +29,10 @@ if (process.env.YT_COOKIES && !fs.existsSync(COOKIES_FILE)) {
  * @param {boolean} forDownload - if true, adds android player client (better for actual downloads)
  */
 function getYtDlpAuthArgs(forDownload = false) {
-    const args = [];
-    if (forDownload) {
-        // Android client bypasses some bot checks during download
-        args.push('--extractor-args', 'youtube:player_client=android,web');
-    } else {
-        // iOS client is currently the most robust for bypassing blocks on cloud IPs
-        args.push('--extractor-args', 'youtube:player_client=ios,web,mweb');
-    }
+    const args = [
+        // Using a mix of clients that support cookies well and have good format coverage
+        '--extractor-args', 'youtube:player_client=ios,web,mweb'
+    ];
     const cookiesFile = process.env.YT_COOKIES_FILE || (fs.existsSync(COOKIES_FILE) ? COOKIES_FILE : null);
     if (cookiesFile) {
         args.push('--cookies', cookiesFile);
@@ -71,7 +67,12 @@ function formatDuration(secs) {
 function cleanUrl(url) {
     try {
         const u = new URL(url);
+        // Remove common trackers
         u.searchParams.delete('si');
+        u.searchParams.delete('feature');
+        u.searchParams.delete('utm_source');
+        u.searchParams.delete('utm_medium');
+        u.searchParams.delete('utm_campaign');
         return u.toString();
     } catch (e) {
         return url;
@@ -297,18 +298,18 @@ export function downloadViaYtDlp(pageUrl, videoItag, audioItag, res) {
         const cleanAudioItag = audioItag?.replace('_mp3', '');
 
         let formatSelector;
-        if (videoItag && cleanAudioItag) {
-            // If itag-like (numeric or specific), use + syntax
-            // If it's the fallback bestvideo syntax, pass it through directly
-            if (videoItag.includes('[') || videoItag === 'best') {
-                 formatSelector = videoItag;
-            } else {
-                 formatSelector = `${videoItag}+${cleanAudioItag}/bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]`;
-            }
+        // Check if the input is a complex selector (fallback case)
+        if (videoItag && (videoItag.includes('[') || videoItag.includes('/') || videoItag.includes('+'))) {
+            formatSelector = videoItag;
+            if (wantMp3) formatSelector = 'bestaudio/best';
+        } else if (videoItag && cleanAudioItag) {
+            formatSelector = `${videoItag}+${cleanAudioItag}/bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best[ext=mp4]`;
         } else if (cleanAudioItag) {
-            formatSelector = `${cleanAudioItag}/bestaudio[ext=m4a]`;
+            formatSelector = `${cleanAudioItag}/bestaudio[ext=m4a]/bestaudio`;
+        } else if (videoItag) {
+            formatSelector = `${videoItag}/bestvideo[ext=mp4]/best`;
         } else {
-            formatSelector = `${videoItag}/bestvideo[ext=mp4]`;
+            formatSelector = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best';
         }
 
         const args = [
