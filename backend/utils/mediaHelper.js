@@ -24,14 +24,15 @@ if (process.env.YT_COOKIES && !fs.existsSync(COOKIES_FILE)) {
 }
 
 /**
- * Returns extra yt-dlp args for YouTube auth:
- * - Uses Android player client to bypass bot detection
- * - Adds --cookies if YT_COOKIES_FILE env var or /tmp/yt-cookies.txt exists
+ * Returns extra yt-dlp args for YouTube auth.
+ * @param {boolean} forDownload - if true, adds android player client (better for actual downloads)
  */
-function getYtDlpAuthArgs() {
-    const args = [
-        '--extractor-args', 'youtube:player_client=android,web'
-    ];
+function getYtDlpAuthArgs(forDownload = false) {
+    const args = [];
+    if (forDownload) {
+        // Android client bypasses some bot checks during download
+        args.push('--extractor-args', 'youtube:player_client=android,web');
+    }
     const cookiesFile = process.env.YT_COOKIES_FILE || (fs.existsSync(COOKIES_FILE) ? COOKIES_FILE : null);
     if (cookiesFile) {
         args.push('--cookies', cookiesFile);
@@ -71,7 +72,7 @@ async function getYouTubeInfo(videoUrl) {
             '--dump-json',
             '--no-playlist',
             '--quiet',
-            ...getYtDlpAuthArgs(),
+            ...getYtDlpAuthArgs(false),  // info fetch: use web client for full format list
             videoUrl
         ], { timeout: 45000, maxBuffer: 20 * 1024 * 1024 });
         stdout = result.stdout;
@@ -244,7 +245,7 @@ export function downloadViaYtDlp(pageUrl, videoItag, audioItag, res) {
             '--no-playlist',
             '-o', '-',
             '--quiet',
-            ...getYtDlpAuthArgs()
+            ...getYtDlpAuthArgs(true)   // download: android client helps avoid bot checks
         ];
 
         if (wantMp3) {
