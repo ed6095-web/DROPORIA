@@ -2,18 +2,43 @@ import { instagramGetUrl } from 'instagram-url-direct';
 import { spawn, execFile } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// yt-dlp binary: yt-dlp.exe on Windows, yt-dlp on Linux (downloaded at build on Render)
 const ytdlpBin = path.join(process.cwd(), process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp');
-
-// ffmpeg-static binary for merging
 const ffmpegBin = path.join(process.cwd(), 'node_modules', 'ffmpeg-static', process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
-
 const execFileAsync = promisify(execFile);
+
+// Write YT_COOKIES env var to a temp file so yt-dlp can use it for auth
+const COOKIES_FILE = '/tmp/yt-cookies.txt';
+if (process.env.YT_COOKIES && !fs.existsSync(COOKIES_FILE)) {
+    try {
+        fs.writeFileSync(COOKIES_FILE, process.env.YT_COOKIES, 'utf8');
+        console.log('[mediaHelper] Wrote YT_COOKIES to', COOKIES_FILE);
+    } catch (e) {
+        console.warn('[mediaHelper] Could not write cookies file:', e.message);
+    }
+}
+
+/**
+ * Returns extra yt-dlp args for YouTube auth:
+ * - Uses Android player client to bypass bot detection
+ * - Adds --cookies if YT_COOKIES_FILE env var or /tmp/yt-cookies.txt exists
+ */
+function getYtDlpAuthArgs() {
+    const args = [
+        '--extractor-args', 'youtube:player_client=android,web'
+    ];
+    const cookiesFile = process.env.YT_COOKIES_FILE || (fs.existsSync(COOKIES_FILE) ? COOKIES_FILE : null);
+    if (cookiesFile) {
+        args.push('--cookies', cookiesFile);
+        console.log('[mediaHelper] Using cookies from:', cookiesFile);
+    }
+    return args;
+}
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
@@ -46,6 +71,7 @@ async function getYouTubeInfo(videoUrl) {
             '--dump-json',
             '--no-playlist',
             '--quiet',
+            ...getYtDlpAuthArgs(),
             videoUrl
         ], { timeout: 45000, maxBuffer: 20 * 1024 * 1024 });
         stdout = result.stdout;
@@ -217,7 +243,8 @@ export function downloadViaYtDlp(pageUrl, videoItag, audioItag, res) {
             '--ffmpeg-location', ffmpegBin,
             '--no-playlist',
             '-o', '-',
-            '--quiet'
+            '--quiet',
+            ...getYtDlpAuthArgs()
         ];
 
         if (wantMp3) {
