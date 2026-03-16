@@ -32,6 +32,9 @@ function getYtDlpAuthArgs(forDownload = false) {
     if (forDownload) {
         // Android client bypasses some bot checks during download
         args.push('--extractor-args', 'youtube:player_client=android,web');
+    } else {
+        // For info fetching, use web/mweb to get greatest range of formats
+        args.push('--extractor-args', 'youtube:player_client=web,mweb');
     }
     const cookiesFile = process.env.YT_COOKIES_FILE || (fs.existsSync(COOKIES_FILE) ? COOKIES_FILE : null);
     if (cookiesFile) {
