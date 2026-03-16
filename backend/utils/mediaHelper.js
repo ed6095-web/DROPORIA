@@ -73,7 +73,8 @@ async function getYouTubeInfo(videoUrl) {
             '--no-playlist',
             '--no-check-formats',
             '--quiet',
-            videoUrl  // no cookies for info - they cause premium format errors on cloud IPs
+            ...getYtDlpAuthArgs(false),
+            videoUrl
         ], { timeout: 45000, maxBuffer: 20 * 1024 * 1024 });
         stdout = result.stdout;
     } catch (err) {
