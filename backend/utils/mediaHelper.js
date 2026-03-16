@@ -3,6 +3,7 @@ import { spawn, execFile } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs';
+import axios from 'axios';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -33,8 +34,8 @@ function getYtDlpAuthArgs(forDownload = false) {
         // Android client bypasses some bot checks during download
         args.push('--extractor-args', 'youtube:player_client=android,web');
     } else {
-        // For info fetching, use web/mweb to get greatest range of formats
-        args.push('--extractor-args', 'youtube:player_client=web,mweb');
+        // iOS client is currently the most robust for bypassing blocks on cloud IPs
+        args.push('--extractor-args', 'youtube:player_client=ios,web,mweb');
     }
     const cookiesFile = process.env.YT_COOKIES_FILE || (fs.existsSync(COOKIES_FILE) ? COOKIES_FILE : null);
     if (cookiesFile) {
@@ -64,11 +65,36 @@ function formatDuration(secs) {
     return `${m}:${String(s).padStart(2,'0')}`;
 }
 
+/**
+ * Strips trackers like ?si= from URLs
+ */
+function cleanUrl(url) {
+    try {
+        const u = new URL(url);
+        u.searchParams.delete('si');
+        return u.toString();
+    } catch (e) {
+        return url;
+    }
+}
+
 // ─── YouTube via yt-dlp --dump-json ──────────────────────────────────────────
 
 async function getYouTubeInfo(videoUrl) {
-    console.log('[mediaHelper] Fetching YouTube info via yt-dlp --dump-json');
+    const cleanedUrl = cleanUrl(videoUrl);
+    console.log(`[mediaHelper] Fetching YouTube info for: ${cleanedUrl}`);
 
+    // Step 1: Pre-fetch basic metadata via oEmbed (foolproof)
+    let oEmbedData = null;
+    try {
+        const oEmbedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(cleanedUrl)}&format=json`;
+        const resp = await axios.get(oEmbedUrl, { timeout: 5000 });
+        oEmbedData = resp.data;
+    } catch (e) {
+        console.warn('[mediaHelper] oEmbed fetch failed:', e.message);
+    }
+
+    // Step 2: Try yt-dlp for full format list
     let stdout = '';
     try {
         const result = await execFileAsync(ytdlpBin, [
@@ -77,12 +103,18 @@ async function getYouTubeInfo(videoUrl) {
             '--no-check-formats',
             '--quiet',
             ...getYtDlpAuthArgs(false),
-            videoUrl
-        ], { timeout: 45000, maxBuffer: 20 * 1024 * 1024 });
+            cleanedUrl
+        ], { timeout: 45000, maxBuffer: 30 * 1024 * 1024 });
         stdout = result.stdout;
     } catch (err) {
         stdout = err.stdout || '';
         if (!stdout.trim()) {
+            console.error('[mediaHelper] yt-dlp info failed, attempting oEmbed fallback');
+            
+            // If oEmbed worked, return a "safe" result with default formats
+            if (oEmbedData) {
+                return getFallbackYouTubeResult(oEmbedData, cleanedUrl);
+            }
             throw new Error(err.stderr?.split('\n').find(l => l.includes('ERROR')) || err.message);
         }
     }
@@ -208,18 +240,18 @@ async function getYouTubeInfo(videoUrl) {
 
     // Best thumbnail
     const thumbs = (info.thumbnails || []).filter(t => t.url);
-    const thumbnail_url = thumbs[thumbs.length - 1]?.url || info.thumbnail || null;
+    const thumbnail_url = thumbs[thumbs.length - 1]?.url || info.thumbnail || oEmbedData?.thumbnail_url || null;
 
     return {
-        title: info.title || 'N/A',
+        title: info.title || oEmbedData?.title || 'N/A',
         thumbnail_url,
-        uploader: info.uploader || info.channel || 'N/A',
+        uploader: info.uploader || info.channel || oEmbedData?.author_name || 'N/A',
         duration_string: formatDuration(info.duration),
         view_count: info.view_count || null,
         like_count: info.like_count || null,
         upload_date: info.upload_date || null,
         description: (info.description || '').substring(0, 300),
-        original_url: videoUrl,
+        original_url: cleanedUrl,
         platform: 'YouTube',
         downloadable_formats,
         audio_formats,
@@ -227,16 +259,52 @@ async function getYouTubeInfo(videoUrl) {
     };
 }
 
+/**
+ * Returns a basic "Safe" result using oEmbed metadata and fallback format selectors.
+ * This ensures the user can still attempt a download even if metadata fetch fails.
+ */
+function getFallbackYouTubeResult(oEmbedData, videoUrl) {
+    return {
+        title: oEmbedData.title || 'YouTube Video',
+        thumbnail_url: oEmbedData.thumbnail_url || null,
+        uploader: oEmbedData.author_name || 'YouTube',
+        duration_string: 'N/A',
+        view_count: null,
+        like_count: null,
+        upload_date: null,
+        description: 'Metadata fetch limited on cloud server. Download may still work.',
+        original_url: videoUrl,
+        platform: 'YouTube',
+        downloadable_formats: [
+            { format_id: 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]', audio_format_id: null, ext: 'mp4', resolution: '1080p (Best)', quality_note: 'Best Quality', type: 'video_with_audio', has_audio: true, needs_merge: true, quality_order: 1080 },
+            { format_id: 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]', audio_format_id: null, ext: 'mp4', resolution: '720p', quality_note: '720p', type: 'video_with_audio', has_audio: true, needs_merge: true, quality_order: 720 },
+            { format_id: 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]', audio_format_id: null, ext: 'mp4', resolution: '480p', quality_note: '480p', type: 'video_with_audio', has_audio: true, needs_merge: true, quality_order: 480 }
+        ],
+        audio_formats: [
+            { format_id: 'bestaudio[ext=m4a]/bestaudio', ext: 'm4a', abr: 128, quality_note: 'Best M4A', type: 'audio_only', has_audio: true, quality_order: 256 },
+            { format_id: 'bestaudio_mp3', ext: 'mp3', abr: 128, quality_note: 'Best MP3', type: 'audio_only', has_audio: true, quality_order: 255 }
+        ],
+        thumbnails: [{ url: oEmbedData.thumbnail_url }]
+    };
+}
+
 // ─── Download via yt-dlp stdout pipe ─────────────────────────────────────────
 
 export function downloadViaYtDlp(pageUrl, videoItag, audioItag, res) {
+    const cleanedUrl = cleanUrl(pageUrl);
     return new Promise((resolve, reject) => {
         const wantMp3 = audioItag?.endsWith('_mp3');
         const cleanAudioItag = audioItag?.replace('_mp3', '');
 
         let formatSelector;
         if (videoItag && cleanAudioItag) {
-            formatSelector = `${videoItag}+${cleanAudioItag}/bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]`;
+            // If itag-like (numeric or specific), use + syntax
+            // If it's the fallback bestvideo syntax, pass it through directly
+            if (videoItag.includes('[') || videoItag === 'best') {
+                 formatSelector = videoItag;
+            } else {
+                 formatSelector = `${videoItag}+${cleanAudioItag}/bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]`;
+            }
         } else if (cleanAudioItag) {
             formatSelector = `${cleanAudioItag}/bestaudio[ext=m4a]`;
         } else {
@@ -249,19 +317,19 @@ export function downloadViaYtDlp(pageUrl, videoItag, audioItag, res) {
             '--no-playlist',
             '-o', '-',
             '--quiet',
-            ...getYtDlpAuthArgs(true)   // download: android client helps avoid bot checks
+            ...getYtDlpAuthArgs(true)
         ];
 
         if (wantMp3) {
             args.push('--extract-audio', '--audio-format', 'mp3', '--audio-quality', '0');
-        } else if (!videoItag) {
+        } else if (!videoItag || formatSelector.includes('bestaudio')) {
             args.push('--extract-audio');
         } else {
             args.push('--merge-output-format', 'mp4');
         }
 
-        args.push(pageUrl);
-        console.log(`[mediaHelper] yt-dlp: -f "${formatSelector}" ${pageUrl}`);
+        args.push(cleanedUrl);
+        console.log(`[mediaHelper] yt-dlp: -f "${formatSelector}" ${cleanedUrl}`);
 
         const proc = spawn(ytdlpBin, args);
         let stderrBuf = '';
@@ -286,9 +354,10 @@ export function downloadViaYtDlp(pageUrl, videoItag, audioItag, res) {
 // ─── Instagram via instagram-url-direct ──────────────────────────────────────
 
 async function getInstagramInfo(videoUrl) {
-    console.log('[mediaHelper] Fetching Instagram info via instagram-url-direct');
+    const cleanedUrl = cleanUrl(videoUrl);
+    console.log(`[mediaHelper] Fetching Instagram info via instagram-url-direct: ${cleanedUrl}`);
 
-    const result = await instagramGetUrl(videoUrl);
+    const result = await instagramGetUrl(cleanedUrl);
     if (!result?.url_list?.length) throw new Error('No downloadable media found for this Instagram URL');
 
     const downloadable_formats = result.url_list.map((mediaUrl, index) => {
@@ -322,7 +391,7 @@ async function getInstagramInfo(videoUrl) {
         like_count: result.media_details?.edge_media_preview_like?.count || null,
         upload_date: null,
         description: result.media_details?.caption?.text?.substring(0, 300) || '',
-        original_url: videoUrl,
+        original_url: cleanedUrl,
         platform: 'Instagram',
         downloadable_formats,
         audio_formats: [],
