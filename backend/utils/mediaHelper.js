@@ -71,10 +71,9 @@ async function getYouTubeInfo(videoUrl) {
         const result = await execFileAsync(ytdlpBin, [
             '--dump-json',
             '--no-playlist',
-            '--no-check-formats',   // skip format validity check (avoids "format not available" on cloud)
+            '--no-check-formats',
             '--quiet',
-            ...getYtDlpAuthArgs(false),
-            videoUrl
+            videoUrl  // no cookies for info - they cause premium format errors on cloud IPs
         ], { timeout: 45000, maxBuffer: 20 * 1024 * 1024 });
         stdout = result.stdout;
     } catch (err) {
