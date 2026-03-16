@@ -30,8 +30,9 @@ if (process.env.YT_COOKIES && !fs.existsSync(COOKIES_FILE)) {
  */
 function getYtDlpAuthArgs(forDownload = false) {
     const args = [
-        // Using a mix of clients that support cookies well and have good format coverage
-        '--extractor-args', 'youtube:player_client=ios,web,mweb'
+        // Using web/mweb as primary because they definitely support cookies
+        // Adding android at the end for download fallback
+        '--extractor-args', `youtube:player_client=${forDownload ? 'web,mweb,android' : 'web,mweb'}`
     ];
     const cookiesFile = process.env.YT_COOKIES_FILE || (fs.existsSync(COOKIES_FILE) ? COOKIES_FILE : null);
     if (cookiesFile) {
@@ -316,6 +317,7 @@ export function downloadViaYtDlp(pageUrl, videoItag, audioItag, res) {
             '-f', formatSelector,
             '--ffmpeg-location', ffmpegBin,
             '--no-playlist',
+            '--format-sort', 'vcodec:avc1,ext:mp4:m4a', // Prefer h264 for better merging compatibility
             '-o', '-',
             '--quiet',
             ...getYtDlpAuthArgs(true)

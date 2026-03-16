@@ -358,6 +358,7 @@ class DroporiaApp {
                 </div>
                 
                 <div class="format-actions">
+                    ${format.url ? `
                     <button class="preview-btn" 
                             data-format-id="${format.format_id}"
                             data-format-url="${this.escapeHtml(format.url)}"
@@ -365,7 +366,7 @@ class DroporiaApp {
                             title="Preview this format">
                         <i class="fas fa-play"></i>
                         Preview
-                    </button>
+                    </button>` : ''}
                     <a href="${downloadUrl}" 
                        class="download-btn" 
                        data-filename="${this.escapeHtml(filename)}"
@@ -427,6 +428,11 @@ class DroporiaApp {
         const playerContainer = document.getElementById('playerContainer');
         const previewTitle = document.getElementById('previewTitle');
         const directDownloadButton = document.getElementById('directDownloadButton');
+        
+        if (!url || url === 'undefined' || url === 'null') {
+            this.showToast('Preview not available for this format', 'warning');
+            return;
+        }
         
         playerContainer.innerHTML = '';
         

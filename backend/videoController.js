@@ -57,16 +57,17 @@ export const downloadMergedVideo = async (req, res, next) => {
 };
 
 export const downloadVideoViaProxy = async (req, res, next) => {
-    const { url: mediaUrl, filename, mimeTypeFromClient } = req.query;
+    const { url, filename, mimeTypeFromClient } = req.query;
+    const mediaUrl = url || req.query.mediaUrl; // handle both naming conventions
 
-    console.log(`[ProxyController] Request query:`, { 
-        url: mediaUrl ? `${mediaUrl.substring(0, 30)}...` : 'MISSING', 
-        filename: filename || 'MISSING',
-        mimeType: mimeTypeFromClient || 'DEFAULT' 
+    console.log(`[ProxyController] Downloading:`, { 
+        filename, 
+        hasUrl: !!mediaUrl,
+        urlPreview: mediaUrl ? `${mediaUrl.substring(0, 50)}...` : 'MISSING'
     });
 
-    if (!mediaUrl || !filename || mediaUrl === 'undefined' || filename === 'undefined' || mediaUrl === 'null' || filename === 'null') {
-        console.error(`[ProxyController] Missing params error:`, { mediaUrl, filename });
+    if (!mediaUrl || !filename || mediaUrl === 'undefined' || filename === 'undefined' || mediaUrl === 'null') {
+        console.error(`[ProxyController] Missing params error. Query:`, req.query);
         return res.status(400).json({ success: false, error: 'Media URL and filename are required', code: 'MISSING_PARAMS' });
     }
 
